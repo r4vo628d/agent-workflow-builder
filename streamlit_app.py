@@ -1,56 +1,70 @@
-# pip install streamlit python-dotenv crewai crewai-tools langchain-community pydantic openai
+# pip install streamlit python-dotenv crewai crewai-tools langchain-openai
 
 # streamlit_app.py
 
-# === Standard Python & Streamlit Imports ===
+# === Standard Imports ===
 import os
 import streamlit as st
 from dotenv import load_dotenv
 
-# === CrewAI Core Classes ===
+# === CrewAI Core ===
 from crewai import Agent, Task, Crew
 
-# === LangChain-Compatible Tools ===
-from crewai_tools import CodeInterpreterTool  # CrewAI-native code execution tool
-from crewai_tools import SerperDevTool  # Web search tool
-from crewai.tools import BaseTool  # Custom summarization tool
-from pydantic import BaseModel, Field # For defining tool attributes
+# === Tools ===
+from crewai_tools import CodeInterpreterTool, SerperDevTool
+from crewai.tools import BaseTool
+from pydantic import BaseModel, Field
 
-import openai  # For summarization via GPT
+# === NVIDIA (OpenAI-compatible client) ===
+from openai import OpenAI
+from langchain_openai import ChatOpenAI
 
-# === Load Environment Variables from .env ===
+# === Load ENV ===
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
-serper_api_key = os.getenv("SERPER_API_KEY")
 
-# === Error handling for missing keys ===
-if not openai.api_key or not serper_api_key:
-    st.error("Missing API keys! Make sure OPENAI_API_KEY and SERPER_API_KEY are set in your .env file.")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+SERPER_API_KEY = os.getenv("SERPER_API_KEY")
+
+# === Validate Keys ===
+if not NVIDIA_API_KEY or not SERPER_API_KEY:
+    st.error("❌ Missing API keys! Set NVIDIA_API_KEY and SERPER_API_KEY in .env")
     st.stop()
 
-# === Initialize Tools ===
+# === NVIDIA Client ===
+client = OpenAI(
+    api_key=NVIDIA_API_KEY,
+    base_url="https://integrate.api.nvidia.com/v1"
+)
 
-# Web Search Tool using Serper (Google-like search)
-search_tool = SerperDevTool(api_key=serper_api_key)
+# === LLM for CrewAI Agents ===
+llm = ChatOpenAI(
+    api_key=NVIDIA_API_KEY,
+    base_url="https://integrate.api.nvidia.com/v1",
+    model="meta/llama-3.1-70b-instruct",
+    temperature=0.3
+)
 
-# Code Execution Tool using built-in Python interpreter (safe + multi-line)
+# === Tools Initialization ===
+search_tool = SerperDevTool(api_key=SERPER_API_KEY)
 code_tool = CodeInterpreterTool()
 
-# Match the actual key CrewAI is passing ("description")
+# === Custom Summarizer Tool ===
 class SummarizeToolInput(BaseModel):
     description: str = Field(..., description="Text to summarize")
 
 class SummarizeTool(BaseTool):
     name: str = "Summarizer"
-    description: str = "Summarizes text using OpenAI GPT"
-    args_schema = SummarizeToolInput  # ✅ matches the field name
+    description: str = "Summarizes text using NVIDIA LLM"
+    args_schema = SummarizeToolInput
 
     def _run(self, description: str) -> str:
-        """Summarize the input using GPT."""
         try:
-            response = openai.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": f"Summarize this:\n\n{description}"}],
+            response = client.chat.completions.create(
+                model="meta/llama-3.1-70b-instruct",
+                messages=[
+                    {"role": "system", "content": "You are a helpful summarization assistant."},
+                    {"role": "user", "content": f"Summarize this:\n\n{description}"}
+                ],
                 temperature=0.3,
                 max_tokens=200
             )
@@ -58,7 +72,6 @@ class SummarizeTool(BaseTool):
         except Exception as e:
             return f"Summarization error: {e}"
 
-# Initialize summarizer
 summarize_tool = SummarizeTool()
 
 # === Tool Mapping ===
@@ -68,12 +81,13 @@ TOOL_MAP = {
     "summarize": summarize_tool
 }
 
-# === Streamlit App Setup ===
+# === Streamlit UI ===
 st.set_page_config(page_title="🧠 AI Agent Workflow Builder", layout="centered")
+
 st.title("🧠 AI Agent Workflow Builder")
 st.markdown("""
-Build and launch a custom crew of AI agents powered by [CrewAI](https://github.com/joaomdmoura/crewai).  
-Each agent can have different roles, goals, and tools—including web search, Python execution, and summarization.
+Build and launch a custom crew of AI agents powered by CrewAI.  
+Each agent can use tools like web search, Python execution, and summarization.
 """)
 
 # === Task Input ===
@@ -83,56 +97,58 @@ task_description = st.text_input(
 )
 
 # === Number of Agents ===
-num_agents = st.slider("👥 Number of agents", min_value=2, max_value=5, value=3)
+num_agents = st.slider("👥 Number of agents", 2, 5, 3)
 
-# === Agent Configuration UI ===
+# === Agent Config ===
 st.markdown("---")
 st.subheader("⚙️ Configure Each Agent")
 
 agent_configs = []
 
-# For each agent, gather role, goal, and tools via UI
 for i in range(num_agents):
     with st.expander(f"Agent {i+1}"):
-        role = st.text_input(f"🔧 Role for Agent {i+1}", value=f"Agent {i+1}")
-        goal = st.text_area(f"🎯 Goal for Agent {i+1}", value=f"Assist with: {task_description}")
+        role = st.text_input(f"Role {i+1}", value=f"Agent {i+1}", key=f"role_{i}")
+        goal = st.text_area(f"Goal {i+1}", value=f"Assist with: {task_description}", key=f"goal_{i}")
         tools = st.multiselect(
-            f"🧰 Tools for Agent {i+1}",
+            f"Tools {i+1}",
             options=list(TOOL_MAP.keys()),
-            default=["search"]
+            default=["search"],
+            key=f"tools_{i}"
         )
+
         agent_configs.append({
             "role": role,
             "goal": goal,
             "tools": tools
         })
 
-# === Launch Button ===
+# === Run Crew ===
 if st.button("🚀 Launch Crew Sequentially"):
-    st.info("🛠️ Launching your AI agents sequentially...")
+    st.info("🛠️ Running agents...")
 
     agents = []
 
-    # Step 1: Build Agent objects
+    # Create Agents
     for config in agent_configs:
-        selected_tools = [TOOL_MAP[t] for t in config["tools"] if t in TOOL_MAP]
+        selected_tools = [TOOL_MAP[t] for t in config["tools"]]
 
         agent = Agent(
             role=config["role"],
             goal=config["goal"],
             tools=selected_tools,
+            llm=llm,  # ✅ NVIDIA LLM injected
             backstory=f"{config['role']} is collaborating on this project.",
             verbose=True
         )
         agents.append(agent)
 
-    # Step 2: Sequential execution
-    current_input = task_description  # Initial input to first task
-    results = []  # Store intermediate results
+    # Sequential Execution
+    current_input = task_description
+    results = []
 
     for i, agent in enumerate(agents):
         task = Task(
-            description=f"{current_input}",
+            description=current_input,
             agent=agent,
             expected_output=f"Output from {agent.role}"
         )
@@ -143,18 +159,18 @@ if st.button("🚀 Launch Crew Sequentially"):
             verbose=True
         )
 
-        with st.spinner(f"🤖 Agent {i+1} ({agent.role}) is working..."):
+        with st.spinner(f"🤖 {agent.role} is working..."):
             output = crew.kickoff()
 
         results.append((agent.role, output))
-        current_input = output  # Pass to next agent
+        current_input = output
 
-    # Step 3: Display final result
-    st.success("✅ All agents have completed their tasks!")
-    st.subheader("📄 Final Output (from last agent)")
+    # === Final Output ===
+    st.success("✅ All agents completed tasks!")
+    st.subheader("📄 Final Output")
     st.write(current_input)
 
-    # Optional: Show step-by-step outputs
+    # === Debug Outputs ===
     with st.expander("🧾 Full Agent Outputs"):
         for role, output in results:
             st.markdown(f"**{role}**")
