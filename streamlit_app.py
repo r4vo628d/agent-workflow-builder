@@ -60,7 +60,7 @@ class SummarizeTool(BaseTool):
     def _run(self, description: str) -> str:
         try:
             response = client.chat.completions.create(
-                model="meta/llama-3.1-70b-instruct",
+                model="mistralai/devstral-2-123b-instruct-2512",
                 messages=[
                     {"role": "system", "content": "You are a helpful summarization assistant."},
                     {"role": "user", "content": f"Summarize this:\n\n{description}"}
