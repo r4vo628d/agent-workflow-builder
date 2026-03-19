@@ -40,7 +40,7 @@ client = OpenAI(
 llm = ChatOpenAI(
     api_key=NVIDIA_API_KEY,
     base_url="https://integrate.api.nvidia.com/v1",
-    model="meta/llama-3.1-70b-instruct",
+    model="mistralai/devstral-2-123b-instruct-2512",
     temperature=0.3
 )
 
