@@ -40,7 +40,7 @@ client = OpenAI(
 llm = ChatOpenAI(
     api_key=NVIDIA_API_KEY,
     base_url="https://integrate.api.nvidia.com/v1",
-    model='dphn/Dolphin-Mistral-24B-Venice-Edition',
+    model='huggingface/dphn/Dolphin-Mistral-24B-Venice-Edition',
     temperature=0.3
 )
 
@@ -60,7 +60,7 @@ class SummarizeTool(BaseTool):
     def _run(self, description: str) -> str:
         try:
             response = client.chat.completions.create(
-                model='dphn/Dolphin-Mistral-24B-Venice-Edition',
+                model='huggingface/dphn/Dolphin-Mistral-24B-Venice-Edition',
                 messages=[
                     {"role": "system", "content": "You are a helpful summarization assistant."},
                     {"role": "user", "content": f"Summarize this:\n\n{description}"}
