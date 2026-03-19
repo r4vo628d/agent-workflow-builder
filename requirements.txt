@@ -5,3 +5,4 @@ crewai-tools
 langchain-community
 pydantic
 openai
+langchain-openai
