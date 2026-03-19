@@ -8,7 +8,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 # === CrewAI Core ===
-from crewai import Agent, Task, Crew
+from crewai import Agent, Task, Crew, LLM
 
 # === Tools ===
 from crewai_tools import CodeInterpreterTool, SerperDevTool
@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 
 # === NVIDIA (OpenAI-compatible client) ===
 from openai import OpenAI
-from langchain_openai import ChatOpenAI
 
 # === Load ENV ===
 load_dotenv()
@@ -30,33 +29,26 @@ if not NVIDIA_API_KEY or not SERPER_API_KEY:
     st.error("❌ Missing API keys! Set NVIDIA_API_KEY and SERPER_API_KEY in .env")
     st.stop()
 
-# === NVIDIA Client ===
-from openai import OpenAI
-
+# === NVIDIA Client (for direct API calls / custom tools) ===
+# FIX 1: Use the variable, not the literal string "$NVIDIA_API_KEY"
 client = OpenAI(
-  base_url = "https://integrate.api.nvidia.com/v1",
-  api_key = "$NVIDIA_API_KEY"
+    base_url="https://integrate.api.nvidia.com/v1",
+    api_key=NVIDIA_API_KEY  # ✅ was: api_key="$NVIDIA_API_KEY"
 )
 
-completion = client.chat.completions.create(
-  model="deepseek-ai/deepseek-v3.2",
-  messages=[{"role":"user","content":""}],
-  temperature=1,
-  top_p=0.95,
-  max_tokens=8192,
-  extra_body={"chat_template_kwargs": {"thinking":True}},
-  stream=True
-)
+# FIX 2: Removed the module-level streaming test block — it ran at startup,
+#         printed to stdout (not Streamlit), and crashed the app before the UI loaded.
 
-for chunk in completion:
-  if not getattr(chunk, "choices", None):
-    continue
-  reasoning = getattr(chunk.choices[0].delta, "reasoning_content", None)
-  if reasoning:
-    print(reasoning, end="")
-  if chunk.choices and chunk.choices[0].delta.content is not None:
-    print(chunk.choices[0].delta.content, end="")
-  
+# === LLM for CrewAI Agents ===
+# FIX 3: Use crewai.LLM instead of langchain_openai.ChatOpenAI.
+#         CrewAI's LLM class routes through LiteLLM; prefix "openai/" tells
+#         LiteLLM to use the OpenAI-compatible endpoint, which NVIDIA exposes.
+llm = LLM(
+    model="openai/meta/llama-3.3-70b-instruct",   # ✅ valid NVIDIA-hosted model
+    api_key=NVIDIA_API_KEY,
+    base_url="https://integrate.api.nvidia.com/v1",
+    temperature=0.3
+)
 
 # === Tools Initialization ===
 search_tool = SerperDevTool(api_key=SERPER_API_KEY)
@@ -69,12 +61,16 @@ class SummarizeToolInput(BaseModel):
 class SummarizeTool(BaseTool):
     name: str = "Summarizer"
     description: str = "Summarizes text using NVIDIA LLM"
-    args_schema = SummarizeToolInput
+    args_schema: type[BaseModel] = SummarizeToolInput
 
     def _run(self, description: str) -> str:
         try:
+            # FIX 4: Use a valid NVIDIA-hosted model, not a HuggingFace path.
+            #         "huggingface/dphn/Dolphin-Mistral-24B-Venice-Edition" caused
+            #         a 401 AuthenticationError because it routed to HuggingFace,
+            #         not NVIDIA.
             response = client.chat.completions.create(
-                model='huggingface/dphn/Dolphin-Mistral-24B-Venice-Edition',
+                model="meta/llama-3.3-70b-instruct",  # ✅ valid NVIDIA model
                 messages=[
                     {"role": "system", "content": "You are a helpful summarization assistant."},
                     {"role": "user", "content": f"Summarize this:\n\n{description}"}
@@ -150,7 +146,7 @@ if st.button("🚀 Launch Crew Sequentially"):
             role=config["role"],
             goal=config["goal"],
             tools=selected_tools,
-            llm=llm,  # ✅ NVIDIA LLM injected
+            llm=llm,  # ✅ crewai.LLM instance pointing at NVIDIA
             backstory=f"{config['role']} is collaborating on this project.",
             verbose=True
         )
@@ -177,7 +173,7 @@ if st.button("🚀 Launch Crew Sequentially"):
             output = crew.kickoff()
 
         results.append((agent.role, output))
-        current_input = output
+        current_input = str(output)  # ensure string for next agent's input
 
     # === Final Output ===
     st.success("✅ All agents completed tasks!")
